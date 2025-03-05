@@ -11,146 +11,14 @@ import math
 from stock_data import fetch_stock_data, calculate_historical_volatility
 from option_analysis import get_option_chain, filter_low_delta_puts
 from paper_trading import calculate_put_option_greeks
-
-def run_monte_carlo_simulation(stock_price, days, volatility, num_simulations=1000, seed=None):
-    """
-    Run a Monte Carlo simulation for stock price movements
-    
-    Parameters:
-    stock_price (float): Current stock price
-    days (int): Number of days to simulate
-    volatility (float): Annual volatility as a decimal
-    num_simulations (int): Number of simulations to run
-    seed (int): Random seed for reproducibility
-    
-    Returns:
-    ndarray: Simulated price paths (num_simulations x days)
-    """
-    if seed is not None:
-        np.random.seed(seed)
-    
-    # Daily volatility
-    daily_vol = volatility / np.sqrt(252)
-    
-    # Daily returns are normally distributed with mean 0 and std = daily_vol
-    daily_returns = np.random.normal(0, daily_vol, (num_simulations, days))
-    
-    # Calculate price paths
-    price_paths = np.zeros((num_simulations, days + 1))
-    price_paths[:, 0] = stock_price
-    
-    for t in range(1, days + 1):
-        price_paths[:, t] = price_paths[:, t-1] * np.exp(daily_returns[:, t-1])
-    
-    return price_paths
-
-def calculate_put_assignment_probability(current_price, strike_price, days_to_expiry, volatility):
-    """
-    Calculate the probability of a put option being assigned at expiration
-    
-    Parameters:
-    current_price (float): Current stock price
-    strike_price (float): Option strike price
-    days_to_expiry (int): Days until option expiration
-    volatility (float): Annual volatility as a decimal
-    
-    Returns:
-    float: Probability of assignment (0-1)
-    """
-    # Convert days to years
-    t = days_to_expiry / 365.0
-    
-    # If already ITM, higher probability of assignment
-    if current_price < strike_price:
-        return 0.95
-    
-    # Calculate probability using Black-Scholes
-    if t <= 0:
-        return 0.0
-    
-    # Calculate d2 from Black-Scholes
-    d2 = (np.log(current_price / strike_price) - (volatility ** 2 / 2) * t) / (volatility * np.sqrt(t))
-    
-    # Calculate probability that stock price will be below strike at expiration
-    probability = norm.cdf(-d2)
-    
-    return probability
-
-def calculate_max_loss(put_options_df):
-    """
-    Calculate the maximum potential loss for a portfolio of put options
-    
-    Parameters:
-    put_options_df (DataFrame): DataFrame containing put option positions
-    
-    Returns:
-    float: Maximum potential loss
-    """
-    if put_options_df.empty:
-        return 0.0
-    
-    # Sum of (strike_price * 100 - premium * 100) for each position
-    max_loss = ((put_options_df['strike'] * 100) - (put_options_df['premium'] * 100)).sum()
-    
-    return max_loss
-
-def calculate_value_at_risk(put_options_df, confidence_level=0.95):
-    """
-    Calculate Value at Risk (VaR) for a portfolio of put options
-    
-    Parameters:
-    put_options_df (DataFrame): DataFrame containing put option positions
-    confidence_level (float): Confidence level for VaR calculation (e.g., 0.95 for 95%)
-    
-    Returns:
-    float: Value at Risk
-    """
-    if put_options_df.empty:
-        return 0.0
-    
-    # Simulate potential losses
-    losses = []
-    
-    for _, position in put_options_df.iterrows():
-        ticker = position['ticker']
-        strike = position['strike']
-        premium = position['premium']
-        days_to_expiry = position['days_to_expiry']
-        
-        try:
-            # Get stock price data
-            stock_data = fetch_stock_data(ticker)
-            current_price = stock_data['Close'].iloc[-1]
-            
-            # Calculate volatility
-            volatility = calculate_historical_volatility(ticker) / 100  # Convert from percentage
-            
-            # Run a Monte Carlo simulation
-            price_paths = run_monte_carlo_simulation(
-                current_price, 
-                days_to_expiry, 
-                volatility, 
-                num_simulations=1000
-            )
-            
-            # Calculate losses for each simulation at expiration
-            final_prices = price_paths[:, -1]
-            position_losses = np.maximum(0, strike - final_prices) * 100 - premium * 100
-            
-            losses.append(position_losses)
-        except Exception as e:
-            st.warning(f"Error calculating VaR for {ticker}: {str(e)}")
-    
-    if losses:
-        # Combine losses across all positions
-        total_losses = np.sum(losses, axis=0)
-        
-        # Calculate VaR
-        var = np.percentile(total_losses, confidence_level * 100)
-        
-        return var
-    
-    return 0.0
+from risk_simulation import run_monte_carlo_simulation
+from risk_metrics import (
+    calculate_put_assignment_probability,
+    calculate_max_loss,
+    calculate_value_at_risk,
+    analyze_portfolio_risk,
+    calculate_correlation_matrix
+)
 
 def analyze_option_risk(ticker, option_expiry, option_strike, risk_free_rate=0.035):
     """
@@ -300,3 +168,145 @@ def analyze_option_risk(ticker, option_expiry, option_strike, risk_free_rate=0.0
         }
         
         return risk_metrics, scenario_df
+    
+    except Exception as e:
+        st.error(f"Error analyzing option risk: {str(e)}")
+        return {}, pd.DataFrame()
+
+def display_risk_analysis(stocks):
+    """
+    Display risk analysis in Streamlit
+    
+    Parameters:
+    stocks (list): List of stock tickers to analyze
+    """
+    st.header("Advanced Risk Analysis")
+    
+    # Stock selection
+    selected_stock = st.selectbox("Select Stock", stocks)
+    
+    # Get stock data
+    stock_data = fetch_stock_data(selected_stock)
+    current_price = stock_data['Close'].iloc[-1]
+    
+    # Historical volatility
+    volatility = calculate_historical_volatility(selected_stock)
+    
+    # Display basic stock risk metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Current Price", f"${current_price:.2f}")
+    
+    with col2:
+        st.metric("Historical Volatility", f"{volatility:.2f}%")
+    
+    with col3:
+        # Calculate beta
+        market_data = fetch_stock_data("SPY")
+        if not market_data.empty and not stock_data.empty:
+            stock_returns = stock_data['Close'].pct_change().dropna()
+            market_returns = market_data['Close'].pct_change().dropna()
+            
+            # Align the data
+            aligned_data = pd.concat([stock_returns, market_returns], axis=1).dropna()
+            if len(aligned_data) > 0:
+                # Calculate beta using covariance / variance
+                beta = np.cov(aligned_data.iloc[:, 0], aligned_data.iloc[:, 1])[0, 1] / np.var(aligned_data.iloc[:, 1])
+                st.metric("Beta", f"{beta:.2f}")
+            else:
+                st.metric("Beta", "N/A")
+        else:
+            st.metric("Beta", "N/A")
+    
+    with col4:
+        if not stock_data.empty:
+            # Calculate drawdown
+            rolling_max = stock_data['Close'].cummax()
+            drawdown = (stock_data['Close'] - rolling_max) / rolling_max
+            max_drawdown = drawdown.min() * 100
+            st.metric("Max Drawdown", f"{max_drawdown:.2f}%")
+        else:
+            st.metric("Max Drawdown", "N/A")
+    
+    # Option Chain for the selected stock
+    option_chain = get_option_chain(selected_stock)
+    
+    if option_chain:
+        # Get expiration dates
+        expiry_dates = list(option_chain.keys())
+        
+        # Expiration date selection
+        selected_expiry = st.selectbox("Select Expiration Date", expiry_dates)
+        
+        # Get put options for selected expiry
+        put_options = option_chain[selected_expiry]
+        
+        # Filter to show options around current price (±30%)
+        price_range = (current_price * 0.7, current_price * 1.3)
+        filtered_puts = put_options[(put_options['strike'] >= price_range[0]) & 
+                                    (put_options['strike'] <= price_range[1])]
+        
+        # Display available put options
+        if not filtered_puts.empty:
+            st.subheader(f"Put Options for {selected_stock} expiring on {selected_expiry}")
+            
+            # Format the display
+            display_puts = filtered_puts.copy()
+            if 'lastPrice' in display_puts.columns:
+                display_puts['lastPrice'] = display_puts['lastPrice'].map('${:,.2f}'.format)
+            if 'strike' in display_puts.columns:
+                display_puts['strike'] = display_puts['strike'].map('${:,.2f}'.format)
+            
+            st.dataframe(display_puts)
+            
+            # Select a specific option for detailed analysis
+            strike_options = put_options['strike'].unique()
+            selected_strike = st.select_slider(
+                "Select Strike Price for Analysis",
+                options=sorted(strike_options),
+                value=min(strike_options, key=lambda x: abs(x - current_price))
+            )
+            
+            # Perform detailed risk analysis
+            st.subheader(f"Detailed Risk Analysis for ${selected_strike} Put")
+            
+            risk_metrics, scenario_df = analyze_option_risk(
+                selected_stock,
+                selected_expiry,
+                selected_strike
+            )
+            
+            if risk_metrics and not scenario_df.empty:
+                from risk_visualization import (
+                    display_risk_metrics,
+                    display_pnl_chart,
+                    display_scenario_analysis,
+                    display_monte_carlo_simulation,
+                    display_risk_recommendations
+                )
+                
+                # Display risk metrics
+                display_risk_metrics(risk_metrics)
+                
+                # Display P&L chart
+                display_pnl_chart(current_price, selected_strike, risk_metrics)
+                
+                # Display scenario analysis
+                display_scenario_analysis(scenario_df)
+                
+                # Display Monte Carlo simulation
+                display_monte_carlo_simulation(
+                    current_price, 
+                    selected_strike,
+                    risk_metrics
+                )
+                
+                # Display risk recommendations
+                display_risk_recommendations(risk_metrics)
+            else:
+                st.error("Unable to perform risk analysis for the selected option.")
+        else:
+            st.info(f"No put options available for {selected_stock} in the selected price range.")
+    else:
+        st.warning(f"No option data available for {selected_stock}. Please try another stock.")
