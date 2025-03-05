@@ -1,0 +1,10 @@
+#requirements
+streamlit
+pandas
+yfinance
+numpy
+plotly
+scipy
+matplotlib
+scikit-learn
+statsmodels
