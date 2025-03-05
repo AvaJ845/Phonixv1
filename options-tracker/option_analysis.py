@@ -1,4 +1,3 @@
-#option_analysis.py
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -38,44 +37,44 @@ def get_option_chain(ticker):
         st.error(f"Error fetching options for {ticker}: {str(e)}")
         return {}
 
-
 def filter_low_delta_puts(puts_df, max_delta=0.1):
     """
-    Filter put options to find those with delta < max_delta
+    Filter put options to find those with delta < 0.1
     
     Parameters:
     puts_df (DataFrame): DataFrame containing put options data
-    max_delta (float): Maximum delta value to filter by
+    max_delta (float): Maximum delta value to filter by (fixed at 0.1)
     
     Returns:
-    DataFrame: Filtered DataFrame containing only puts with delta < max_delta
+    DataFrame: Filtered DataFrame containing only puts with delta < 0.1
     """
     # Ensure delta is negative for puts and convert to absolute value
     if 'delta' in puts_df.columns:
         puts_df['delta'] = puts_df['delta'].abs()
         
-        # Filter by delta threshold
-        low_delta_puts = puts_df[puts_df['delta'] < max_delta].copy()
+        # Filter by fixed delta threshold of 0.1
+        low_delta_puts = puts_df[puts_df['delta'] < 0.1].copy()
         
         # Add additional metrics if needed
         if not low_delta_puts.empty:
-            # Calculate annualized return
+            # Calculate days to expiry
             days_to_expiry = (datetime.strptime(low_delta_puts['expiration'].iloc[0], '%Y-%m-%d') - datetime.now()).days
             if days_to_expiry <= 0:
                 days_to_expiry = 1  # Avoid division by zero
             
+            # Calculate annualized return
             low_delta_puts['annualized_return'] = (low_delta_puts['lastPrice'] / low_delta_puts['strike']) * (365 / days_to_expiry) * 100
             
-            # Calculate risk-reward ratio (premium to distance from strike)
+            # Calculate risk-reward metrics
             stock_price = low_delta_puts['lastPrice'].iloc[0] + low_delta_puts['strike'].iloc[0]  # Approximate current price
             low_delta_puts['distance_pct'] = ((low_delta_puts['strike'] - stock_price) / stock_price) * 100
             low_delta_puts['premium_pct'] = (low_delta_puts['lastPrice'] / low_delta_puts['strike']) * 100
             
-            # Calculate theta (time decay) to delta ratio
+            # Calculate theta-delta ratio if theta is available
             if 'theta' in low_delta_puts.columns:
                 low_delta_puts['theta_delta_ratio'] = low_delta_puts['theta'].abs() / low_delta_puts['delta']
             
-            # Sort by delta (ascending)
+            # Sort by delta for better analysis
             low_delta_puts = low_delta_puts.sort_values('delta')
         
         return low_delta_puts
@@ -83,18 +82,17 @@ def filter_low_delta_puts(puts_df, max_delta=0.1):
         st.warning("Delta information not available in the options data")
         return pd.DataFrame()
 
-
-def recommend_put_strategies(ticker, options_data, risk_tolerance='medium'):
+def recommend_put_strategies(ticker, options_data, risk_tolerance='low'):
     """
-    Recommend put selling strategies based on risk tolerance
+    Recommend put selling strategies focusing on deltas under 0.1
     
     Parameters:
     ticker (str): Stock ticker symbol
     options_data (dict): Dictionary of options data by expiration
-    risk_tolerance (str): Risk tolerance level ('low', 'medium', 'high')
+    risk_tolerance (str): Risk tolerance level ('low', 'medium' - both capped at 0.1 delta)
     
     Returns:
-    DataFrame: Recommended put options to sell
+    DataFrame: Recommended put options to sell with delta < 0.1
     """
     try:
         # Get stock price and volatility data
@@ -103,16 +101,13 @@ def recommend_put_strategies(ticker, options_data, risk_tolerance='medium'):
         
         recommendations = []
         
-        # Define delta thresholds based on risk tolerance
+        # Define delta thresholds - now capped at 0.1 for all risk levels
         if risk_tolerance == 'low':
             max_delta = 0.05
             desired_dte = [30, 45]  # Days to expiration range
-        elif risk_tolerance == 'medium':
-            max_delta = 0.10
+        else:  # medium risk - still capped at 0.1
+            max_delta = 0.1
             desired_dte = [45, 60]
-        else:  # high
-            max_delta = 0.20
-            desired_dte = [60, 90]
         
         for expiry, puts_df in options_data.items():
             # Calculate days to expiration
@@ -127,7 +122,7 @@ def recommend_put_strategies(ticker, options_data, risk_tolerance='medium'):
                 # Convert delta to absolute value since puts have negative delta
                 puts_df['delta_abs'] = puts_df['delta'].abs()
                 
-                # Filter by delta threshold
+                # Filter by delta threshold - ensure it's under 0.1
                 filtered_puts = puts_df[puts_df['delta_abs'] < max_delta].copy()
                 
                 for _, row in filtered_puts.iterrows():
@@ -159,9 +154,3 @@ def recommend_put_strategies(ticker, options_data, risk_tolerance='medium'):
     except Exception as e:
         st.error(f"Error generating recommendations for {ticker}: {str(e)}")
         return pd.DataFrame()
-
-
- 
-            
-            
-            
